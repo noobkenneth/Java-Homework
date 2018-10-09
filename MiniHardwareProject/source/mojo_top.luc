@@ -1,0 +1,303 @@
+module mojo_top (
+    input clk,              // 50MHz clock
+    input rst_n,            // reset button (active low)
+    output led [8],         // 8 user controllable LEDs
+    input cclk,             // configuration clock, AVR ready when high
+    output spi_miso,        // AVR SPI MISO
+    input spi_ss,           // AVR SPI Slave Select
+    input spi_mosi,         // AVR SPI MOSI
+    input spi_sck,          // AVR SPI Clock
+    output spi_channel [4], // AVR general purpose pins (used by default to select ADC channel)
+    input avr_tx,           // AVR TX (FPGA RX)
+    output avr_rx,          // AVR RX (FPGA TX)
+    input avr_rx_busy,      // AVR RX buffer full
+    output io_led [3][8],   // LEDs on IO Shield
+    output io_seg [8],      // 7-segment LEDs on IO Shield
+    output io_sel [4],      // Digit select on IO Shield
+    input io_button [5],    // 5 buttons on IO Shield
+    input io_dip [3][8],     // DIP switches on IO Shield
+    output a,
+    output b,
+    output c,
+    input sum,
+    input carry
+  ) {
+  
+  var leda, ledb, ledc;                 //led corresponding to their respective outputs
+  var button_a, button_b, button_c;      // buttons corresponding to their respective output for manual control                 
+  
+  sig rst;                  // reset signal
+  
+  .clk(clk) {
+    // The reset conditioner is used to synchronize the reset signal to the FPGA
+    // clock. This ensures the entire FPGA comes out of reset at the same time.
+    reset_conditioner reset_cond;
+    .rst(rst) {
+    }
+  }
+  //dff to add delay for the fsm
+  dff counter[28](.clk(clk), .rst(rst));
+  
+  
+  //Finite State Machine. IDLE is default state. states are written as [Auto] OUT(A)(B)(C) R(Sum)(Carry), [Manual] M(A)(B)(C) R(Sum)(Carry).
+  fsm state ( .clk(clk), .rst(rst)) = {IDLE, A001R01, A010R01, A100R01, A101R10,
+    A011R10, A110R10, A111R11, PASS, FAIL, MANUAL};
+  
+  always {
+    reset_cond.in = ~rst_n; // input raw inverted reset signal
+    rst = reset_cond.out;   // conditioned reset
+    
+    led = 8h00;             // turn LEDs off
+    spi_miso = bz;          // not using SPI
+    spi_channel = bzzzz;    // not using flags
+    avr_rx = bz;            // not using serial port
+    
+    io_led = 3x{{8h00}};    // turn LEDs off
+    io_seg = 8hff;          // turn segments off
+    io_sel = 4hf;           // select no digits
+    
+    button_a = io_dip[0][0];// connecting the buttons to io_dip for manual control
+    button_b = io_dip[0][1];
+    button_c = io_dip[0][2];
+    
+    io_led[0][0] = leda;    // connecting leds to respective outputs
+    io_led[0][1] = ledb;
+    io_led[0][2] = ledc;
+    
+    io_led[1][0] = sum;
+    io_led[1][1] = carry;
+    
+    a = 0;
+    b = 0;
+    c = 0; 
+    
+    counter.d = counter.q + 1;
+    
+    case (state.q){
+      state.IDLE:
+        
+        leda = 0;
+        ledb = 0;
+        ledc = 0;
+        
+        a = 0;
+        b = 0;
+        c = 0;
+        
+        //Right button turns machine to auto checking
+        if(io_button[4]){
+          state.d = state.A001R01;
+        }
+        
+        //Left button turns machine to manual checking
+        if(io_button[3]){
+          state.d = state.MANUAL;//Manual Checking of Adder
+          
+        }
+        
+      state.A001R01:
+        
+        leda = 0;
+        ledb = 0;
+        ledc = 1;
+        
+        a = 0;
+        b = 0;
+        c = 1;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 1 & carry == 0){
+            state.d = state.A010R01;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+        
+      state.A010R01:
+        
+        leda = 0;
+        ledb = 1;
+        ledc = 0;
+        
+        a = 0;
+        b = 1;
+        c = 0;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 1 & carry == 0){
+            state.d = state.A100R01;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+        
+      state.A100R01:
+        
+        leda = 1;
+        ledb = 0;
+        ledc = 0;
+        
+        a = 1;
+        b = 0;
+        c = 0;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 1 & carry == 0){
+            state.d = state.A011R10;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+        
+      state.A011R10:
+        leda = 0;
+        ledb = 1;
+        ledc = 1;
+        
+        a = 0;
+        b = 1;
+        c = 1;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 0 & carry == 1){
+            state.d = state.A101R10;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+      
+      state.A101R10:
+        leda = 1;
+        ledb = 0;
+        ledc = 1;
+        
+        a = 1;
+        b = 0;
+        c = 1;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 0 & carry == 1){
+            state.d = state.A110R10;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+      
+      state.A110R10:
+        leda = 1;
+        ledb = 1;
+        ledc = 0;
+        
+        a = 1;
+        b = 1;
+        c = 0;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 0 & carry == 1){
+            state.d = state.A111R11;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+        
+      state.A111R11:
+        leda = 1;
+        ledb = 1;
+        ledc = 1;
+        
+        a = 1;
+        b = 1;
+        c = 1;
+        
+        //allows time for led to be lit up
+        if (counter.q[25] ==1){
+          counter.d = 0;
+          
+          //goes to next state if right
+          if(sum == 1 & carry == 1){
+            state.d = state.PASS;
+          }
+          //goes to FAIL state if inputs are incorrect
+          else {
+            state.d = state.FAIL;
+          }
+        }
+        
+      state.PASS:
+        io_led = 3x{{8hFF}};
+        if (counter.q[26] ==1) {
+          counter.d = 0;
+          state.d = state.IDLE;
+        }
+        
+      state.FAIL:
+        io_led[0] = 8x{counter.q[23]};
+        io_led[1] = 8x{counter.q[23]};
+        io_led[2] = 8x{counter.q[23]};
+        if (counter.q[26] ==1) {
+          counter.d = 0;
+          state.d = state.IDLE;
+        }
+        
+      state.MANUAL:
+        led = 8hFF;
+      
+        leda = button_a;
+        ledb = button_b;
+        ledc = button_c;
+        
+        a = button_a;
+        b = button_b;
+        c = button_c;
+        
+        //ends manual state
+        if(io_button[3]){
+          state.d = state.IDLE;//Manual Checking of Adder
+          
+        }
+        
+        if (counter.q[23] == 1) {
+          counter.d = 0;
+          if (carry * 2 + sum != button_a + button_b + button_c) {
+            state.d = state.FAIL;
+          }
+        }
+  }
+  }
+}
